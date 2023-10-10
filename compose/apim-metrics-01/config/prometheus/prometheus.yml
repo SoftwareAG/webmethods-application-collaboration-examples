@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  # Self
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  # Node exporter for host metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+  # cAdvisor for containers metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+  # Elasticsearch metrics
+  - job_name: 'elasticsearch_exporter'
+    static_configs:
+      - targets: ['elasticsearch-exporter:9114']
+  # API Gateway
+  - job_name: 'apigateway'
+    static_configs:
+      - targets: ['apigateway:5555']
+  # Developer Portal
+  - job_name: 'devportal'
+    metrics_path: '/portal/rest/v1/prometheus'
+    static_configs:
+      - targets: ['devportal:8083']

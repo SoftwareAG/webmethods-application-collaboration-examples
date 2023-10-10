@@ -1,0 +1,263 @@
+version: "3.9"
+
+volumes:
+  esdata: {}
+  prometheus-data: {}
+  grafana-data: {}
+
+networks:
+  n1:
+    external: false
+
+services:
+
+  # Elasticsearch server for core data
+  core-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${CORE_ELK_VERSION}
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    environment:
+      - http.cors.enabled=true
+      - http.cors.allow-origin=/.*/ # This is as large as possible, the lab is supposed to work locally only. Eventually enforce as needed
+      # Important when you have several Elasticsearch containers. They need to be in the same network. Should be a different name than in other environments.
+      - cluster.name=SAG_EventDataStore
+      # The node name. Used for inital master node discovery.
+      - node.name=core-elasticsearch
+      # For discovery of all Elasticsearch containers.
+      - discovery.seed_hosts=core-elasticsearch:9300
+      # Used for cluster bootstrapping. The mentioned nodes are potential master nodes.
+      - cluster.initial_master_nodes=core-elasticsearch
+      # got this from the elasticvue hints
+      - http.cors.allow-headers=X-Requested-With,Content-Type,Content-Length,Authorization
+      - ELASTIC_USERNAME=${PROVIDED_ELASTIC_USERNAME}
+      - ELASTIC_PASSWORD=${PROVIDED_ELASTIC_PASSWORD}
+      - xpack.security.enabled=false
+    ports:
+      # REST interface
+      - ${H_SUIF_PORT_PREFIX}20:9200
+    networks:
+      - n1
+    # Compute resources
+    mem_reservation: 1g 
+    mem_limit: 1g # seems 1g is sufficient to start a small one, see: https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html
+    cpus: 1
+    # kernel / namespace limits
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      interval: 20s
+      retries: 10
+      test: curl -s http://localhost:9200/_cluster/health | grep -vq '"status":"red"'
+  
+  # Elasticvue content explorer for elasticsearch, use for observability reasons
+  elasticvue:
+    image: cars10/elasticvue
+    ports:
+      - "${H_SUIF_PORT_PREFIX}80:8080"
+    networks:
+      - n1
+    depends_on:
+      core-elasticsearch:
+        condition: service_healthy
+    mem_reservation: 100m
+    mem_limit: 500m
+    cpus: 1
+  
+  # API Gateway
+  apigateway:
+    # Image name
+    image: ${APIGW_CONTAINER_IMAGE_NAME}
+    volumes:
+      - ${API_GW_LICENSE_FILE}:/tmp/license.xml
+    environment:
+      - SAG_IS_LICENSE_FILE=/tmp/license.xml
+      - SAG_IS_CONFIG_PROPERTIES=/tmp/application.properties
+      # Name and port of the REST interface of the Elasticsearch container.
+      - apigw_elasticsearch_hosts=core-elasticsearch:9200
+      # HTTPS enablement.
+      - apigw_elasticsearch_https_enabled=false
+      # Username and password for Elasticsearch. As standard leave it blank.
+      - apigw_elasticsearch_http_username=${PROVIDED_ELASTIC_USERNAME}
+      - apigw_elasticsearch_http_password=${PROVIDED_ELASTIC_PASSWORD}
+      # external kibana
+      - apigw_kibana_dashboardInstance=http://host.docker.internal:${H_SUIF_PORT_PREFIX}56
+      - apigw_kibana_autostart=false
+    # Setting for exposing ports to the outside (external port:internal port).
+    ports:
+      # Server port
+      - ${H_SUIF_PORT_PREFIX}55:5555
+      # UI port
+      - ${H_SUIF_PORT_PREFIX}72:9072
+    # Needs to be the same network for all containers.
+    networks:
+      - n1
+    depends_on:
+      core-elasticsearch:
+        condition: service_healthy
+    #  transactions-elasticsearch:
+    #    condition: service_healthy
+    healthcheck:
+      test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:5555/rest/apigateway/health
+      interval: 30s
+      timeout: 10s
+      retries: 2
+      start_period: 120s
+    mem_reservation: 1g
+    mem_limit: 2g
+    cpus: 1
+  
+  # Kibana may be run externally and not in API Gw container
+  core-kibana:
+    image: docker.elastic.co/kibana/kibana:${CORE_ELK_VERSION}
+    depends_on:
+      #core-elasticsearch:
+      #  condition: service_healthy
+      apigateway:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_URL=http://core-elasticsearch:9200
+      - ELASTICSEARCH_HOSTS=http://core-elasticsearch:9200
+      - KIBANA_EXTERNAL_HOSTNAME=http://host.docker.internal:${H_SUIF_PORT_PREFIX}56
+      - ELASTICSEARCH_USERNAME=${PROVIDED_ELASTIC_USERNAME}
+      - ELASTICSEARCH_PASSWORD=${PROVIDED_ELASTIC_PASSWORD}
+      - SERVER_BASEPATH=/apigatewayui/dashboardproxy
+      - CONSOLE_ENABLED=false
+      #- KIBANA_INDEX=gateway_default_dashboard
+    ports:
+    - ${H_SUIF_PORT_PREFIX}56:5601
+    networks:
+    - n1
+    healthcheck:
+      interval: 10s
+      retries: 20
+      test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:5601/api/status
+    # Compute resource limits
+    mem_reservation: 200m
+    mem_limit: 1g # seems 1g is sufficient to start a small one, see: https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html
+    cpus: 1
+  
+  # Developer portal, using the same core elasticsearch and kibana
+  devportal:
+    image: ${DEVPORTAL_CONTAINER_IMAGE_NAME}
+    networks:
+      - n1
+    depends_on:
+      core-elasticsearch:
+        condition: service_healthy
+    environment:
+      - SPRING_ELASTICSEARCH_REST_URIS=http://core-elasticsearch:9200
+      - SPRING_ELASTICSEARCH_REST_USERNAME=${PROVIDED_ELASTIC_USERNAME}
+      - SPRING_ELASTICSEARCH_REST_PASSWORD=${PROVIDED_ELASTIC_PASSWORD}
+      - PORTAL_SERVER_CONFIG_LICENSE=/tmp/license.xml
+    volumes:
+      # WIP: License is not taken at this point, investigations are under way
+      - ${H_DEV_PORTAL_SERVER_CONFIG_LICENSE}:/tmp/license.xml
+    # TODO: how to execute a healthcheck?
+    # healthcheck:
+    ports:
+      - ${H_SUIF_PORT_PREFIX}83:8083
+      - ${H_SUIF_PORT_PREFIX}84:8084
+      - ${H_SUIF_PORT_PREFIX}88:8044
+    mem_reservation: 1g
+    mem_limit: 2g
+    cpus: 1
+  
+  # Server that gathers metrics data
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - ${H_SUIF_PORT_PREFIX}90:9090
+    volumes:
+      - ./config/prometheus/prometheus.yml:/tmp/prometheus/prometheus.yml
+      #- ./config/prometheus/:/tmp/prometheus/
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/tmp/prometheus/prometheus.yml'
+    networks:
+      n1:
+        aliases:
+          - "prometheus"
+    mem_reservation: 1g
+    mem_limit: 2g
+    cpus: 1
+  
+  # Server that produces metrics data on the host
+  node-exporter:
+    image: prom/node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      n1:
+        aliases:
+          - "node-exporter"
+    mem_reservation: 1g
+    mem_limit: 2g
+    cpus: 1
+  
+  # Server that produce metrics for the containers
+  cadvisor:
+    image: google/cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_reservation: 100m
+    mem_limit: 400m
+    cpus: 1
+    networks:
+      n1:
+        aliases:
+          - "cadvisor"
+  
+  # metrics for Elasticsearch
+  # see https://github.com/prometheus-community/elasticsearch_exporter
+  elasticsearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter
+    command:
+      - '--es.uri=http://core-elasticsearch:9200'
+    restart: always
+    #ports:
+    #- "127.0.0.1:9114:9114"
+    networks:
+      n1:
+        aliases:
+          - "elasticsearch-exporter"
+    depends_on:
+      core-elasticsearch:
+        condition: service_healthy
+    mem_reservation: 100m
+    mem_limit: 400m
+    cpus: 1
+  
+  # grafana is used to manage metrics dashboards
+  grafana:
+    image: grafana/grafana
+    ports:
+      - ${H_SUIF_PORT_PREFIX}30:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # These are the dashboards
+      - ./config/grafana/provisioning/:/etc/grafana/provisioning/
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=secret
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    depends_on:
+      # TODO: how to check prometheus for health?
+      prometheus:
+        condition: service_started
+    mem_reservation: 100m
+    mem_limit: 400m
+    cpus: 1
+    networks:
+      n1:
+        aliases:
+          - "grafana"
