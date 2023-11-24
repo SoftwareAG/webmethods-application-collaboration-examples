@@ -31,7 +31,7 @@ docker stop $(docker ps -aq)
 
 # remove all stray volumes if any
 # echo '####################################################'
-# echo 'Revoming docker container volumes (if any)'
+# echo 'Removing docker container volumes (if any)'
 # echo '####################################################'
 # docker volume rm $(docker volume ls -q)
 
