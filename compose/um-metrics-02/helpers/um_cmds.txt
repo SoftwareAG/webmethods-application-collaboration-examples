@@ -1,0 +1,23 @@
+Docker exec:
+    docker exec -it um-metrics-02-umnode-1 bash
+Navigate to tools:
+    cd UniversalMessaging/tools/runner/
+Create connection factory:
+    ./runUMTool.sh CreateConnectionFactory -rname=nsp://localhost:9000 -factoryname=factory
+CreateChannel:
+    ./runUMTool.sh CreateChannel -rname=nsp://localhost:9000 -channelname=channel_01
+CreateJMSTopic:
+    ./runUMTool.sh CreateJMSTopic -rname=nsp://localhost:9000 -channelname=topic0
+CreateQueue:
+    ./runUMTool.sh CreateQueue -rname=nsp://localhost:9000 -queuename=queue_01 -maxevents=10
+PublishChannel:
+    ./runUMTool.sh PublishChannel -rname=nsp://localhost:9000 -channelname=channel_01 -message="hello world"
+PublishQueue:
+    ./runUMTool.sh PublishQueue -rname=nsp://localhost:9000 -queuename=queue_01 -message="hello world"
+JMSPublish:
+    ./runUMTool.sh JMSPublish -rname=nsp://localhost:9000 -connectionfactory=factory -destination=topic0 -message=hello
+    ./runUMTool.sh JMSPublish -rname=nsp://localhost:9000 -connectionfactory=factory -destination=queue_01 -message=hello
+SubsribeChannel:
+    ./runUMTool.sh SubscribeChannel -rname=nsp://localhost:9000 -channelname=channel_01
+SubscribeQueue:
+    ./runUMTool.sh SubscribeQueue -rname=nsp://localhost:9000 -queuename=channel_01

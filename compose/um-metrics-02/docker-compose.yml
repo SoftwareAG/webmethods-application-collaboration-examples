@@ -1,0 +1,110 @@
+version: "3.9"
+
+volumes:
+  prometheus-data: {}
+  grafana-data: {}
+  um_data: {}
+  um_logs: {}
+  um_licence: {}
+  um_users: {}
+
+networks:
+  n1:
+    external: false
+
+services:
+  umnode:
+    image: ${UM_CONTAINER_IMAGE_NAME}
+    ports:                         
+      - ${H_SUIF_PORT_PREFIX}90:9000
+      - ${H_SUIF_PORT_PREFIX}92:9200
+    volumes:
+      - um_data:/opt/softwareag/UniversalMessaging/server/umserver/data
+      - um_logs:/opt/softwareag/UniversalMessaging/server/umserver/logs
+      - ${UM_LICENCE_LOCATION}:/opt/softwareag/UniversalMessaging/server/umserver/licence/
+      - um_users:/opt/softwareag/common/conf
+    networks:
+      n1:
+        aliases:
+          - "um-node"
+
+  prometheus:
+    image: prom/prometheus
+    #ports:
+    #  - ${H_SUIF_PORT_PREFIX}99:9090
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    depends_on:
+      - cadvisor
+    networks:
+      n1:
+        aliases:
+          - "prometheus"
+    mem_reservation: 1g
+    mem_limit: 2g
+    cpus: 1
+  
+  # Server that produces metrics data on the host
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    #ports:
+    #  - ${H_SUIF_PORT_PREFIX}91:9100
+    networks:
+      n1:
+        aliases:
+          - "node-exporter"
+  
+  # Server that produce metrics for the containers
+  cadvisor:
+    image: google/cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_reservation: 100m
+    mem_limit: 400m
+    cpus: 1
+    networks:
+      n1:
+        aliases:
+          - "cadvisor"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - ${H_SUIF_PORT_PREFIX}30:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_INIT_SECRET}
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - DS_PROMETHEUS=prometheus
+    depends_on:
+      prometheus:
+        condition: service_started
+    mem_reservation: 100m
+    mem_limit: 400m
+    cpus: 1
+    networks:
+      n1:
+        aliases:
+          - "grafana"

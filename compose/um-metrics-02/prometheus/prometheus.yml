@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  # Self
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']
+  # Node exporter for host metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+  # cAdvisor for containers metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+  # Universal Messaging metrics
+  - job_name: 'um_realm'
+    static_configs:
+      - targets: ['um-node:9200']
